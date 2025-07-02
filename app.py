@@ -1,107 +1,81 @@
 #Load and clean data
 import streamlit as st
 import pandas as pd
-import seaborn as sns
-import matplotlib.pyplot as plt
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import classification_report
+import numpy as np
+import joblib
 
-data = pd.read_csv("/Users/dell/Downloads/StudentsPerformance.csv")
-data.columns = [col.strip().replace(" ", "_").lower() for col in data.columns]
-data['average_score'] = data[['math_score', 'reading_score', 'writing_score']].mean(axis=1)
-data["high_performer"] = (data["average_score"] > 70).astype(int)
-#
-# # One-hot encode categorical variables
-categorical_cols = ["gender", "race/ethnicity", "parental_level_of_education", "lunch", "test_preparation_course"]
-data_encoded = pd.get_dummies(data, columns=categorical_cols, drop_first=True)
-#
-# # Train Random Forest model
-X = data_encoded.drop(columns=["math_score", "reading_score", "writing_score", "average_score", "high_performer"])
-y = data_encoded["high_performer"]
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-model = RandomForestClassifier()
-model.fit(X_train, y_train)
-#
-# # Streamlit UI
+# Title & Intro
 st.title("🎓 Student Performance Predictor")
-#
-st.sidebar.header("Input Student Information")
-#
-# # Input selectors
-gender = st.sidebar.selectbox("Gender", data["gender"].unique())
-race = st.sidebar.selectbox("Race/Ethnicity", data["race/ethnicity"].unique())
-education = st.sidebar.selectbox("Parental Education", data["parental_level_of_education"].unique())
-lunch = st.sidebar.selectbox("Lunch Type", data["lunch"].unique())
-prep = st.sidebar.selectbox("Test Preparation", data["test_preparation_course"].unique())
-#
-# # Build input DataFrame
-input_dict = {
-    "gender_male": 1 if gender == "male" else 0,
-    "lunch_standard": 1 if lunch == "standard" else 0,
-    "test_preparation_course_none": 1 if prep == "none" else 0
-}
-#
-# # Race/Ethnicity one-hot
-for group in ["group B", "group C", "group D", "group E"]:
-    input_dict[f"race/ethnicity_{group}"] = 1 if race == group else 0
+st.markdown("""
+Predict subject scores and overall performance using socio-economic inputs.
+""")
 
-# Parental education one-hot
-for level in ["bachelor's degree", "high school", "master's degree", "some college", "some high school"]:
-    input_dict[f"parental_level_of_education_{level}"] = 1 if education == level else 0
-#
+# Load sample data for dropdowns
+@st.cache_data
+def load_data():
+    df = pd.read_csv("/Users/dell/Downloads/StudentsPerformance.csv")
+    df.columns = [col.strip().replace(" ", "_").lower() for col in df.columns]
+    return df
 
+data = load_data()
 
-# Step 1: Store expected columns from training data
-expected_cols = X_train.columns.tolist()
+# Centered form
+with st.form(key="student_form"):
+    st.subheader("📝 Enter Student Information")
 
-# Example: Suppose user input dict (you will build this from Streamlit inputs)
-user_input = {
-    'gender_male': 1,
-    'race/ethnicity_group B': 0,
-    'race/ethnicity_group C': 1,
-    'race/ethnicity_group D': 0,
-    'race/ethnicity_group E': 0,
-    "parental_level_of_education_bachelor's degree": 0,
-    "parental_level_of_education_high school": 1,
-    "parental_level_of_education_master's degree": 0,
-    "parental_level_of_education_some college": 0,
-    "parental_level_of_education_some high school": 0,
-    "lunch_standard": 1,
-    "test_preparation_course_none": 0
-}
+    col1, col2 = st.columns(2)
 
-# Step 2: Create DataFrame from input dict
-input_df = pd.DataFrame([user_input])
+    with col1:
+        gender = st.selectbox("Gender", data["gender"].unique())
+        education = st.selectbox("Parental Education", data["parental_level_of_education"].unique())
+        prep = st.selectbox("Test Preparation", data["test_preparation_course"].unique())
 
-# Step 3: Add missing columns with 0
-for col in expected_cols:
-    if col not in input_df.columns:
-        input_df[col] = 0
+    with col2:
+        race = st.selectbox("Race/Ethnicity", data["race/ethnicity"].unique())
+        lunch = st.selectbox("Lunch Type", data["lunch"].unique())
 
-# Step 4: Reorder columns to match training data
-input_df = input_df[expected_cols]
+    submitted = st.form_submit_button("🔮 Predict Performance")
 
-# Step 5: Predict
-prediction = model.predict(input_df)[0]
+# Prepare input only after button click
+if submitted:
+    # Create input DataFrame
+    input_dict = {
+        "gender": [gender],
+        "race/ethnicity": [race],
+        "parental_level_of_education": [education],
+        "lunch": [lunch],
+        "test_preparation_course": [prep]
+    }
+    input_df = pd.DataFrame(input_dict)
 
-print("Prediction:", prediction)
+    # One-hot encode
+    input_encoded = pd.get_dummies(input_df)
+    full_data = pd.get_dummies(data[["gender", "race/ethnicity", "parental_level_of_education", "lunch", "test_preparation_course"]], drop_first=True)
+    input_encoded = input_encoded.reindex(columns=full_data.columns, fill_value=0)
 
-# # # Convert to DataFrame
-# input_df = pd.DataFrame([input_dict])
-# #
-# # # Predict
-# prediction = model.predict(input_df)[0]
-# st.subheader("Prediction Result")
-# st.write("✅ **High Performer**" if prediction == 1 else "⚠️ **Low Performer**")
-# #
-# # Optional: EDA
-st.subheader("📊 EDA: Average Score by Gender")
-fig, ax = plt.subplots()
-sns.boxplot(x="gender", y="average_score", data=data, ax=ax)
-st.pyplot(fig)
-#
-st.subheader("📈 Test Preparation Distribution")
-fig2, ax2 = plt.subplots()
-sns.countplot(x="test_preparation_course", data=data, ax=ax2)
-st.pyplot(fig2)
+    # Load models
+    try:
+        reg_model = joblib.load("regression_model.pkl")
+        clf_model = joblib.load("classifier_model.pkl")
+    except FileNotFoundError:
+        st.error("Model files not found. Train and save them first.")
+        st.stop()
+
+    # Predict
+    scores = reg_model.predict(input_encoded)[0]
+    math, read, write = scores
+    avg = np.mean(scores)
+    label = clf_model.predict(input_encoded)[0]
+
+    # Display predictions
+    st.subheader("📊 Predicted Scores")
+    st.write(f"**Math Score:** {math:.1f}")
+    st.write(f"**Reading Score:** {read:.1f}")
+    st.write(f"**Writing Score:** {write:.1f}")
+    st.write(f"**Average Score:** {avg:.1f}")
+
+    st.subheader("🎯 Performance Category")
+    if label == 1:
+        st.success("High Performer ✅")
+    else:
+        st.warning("Needs Improvement ⚠️")
